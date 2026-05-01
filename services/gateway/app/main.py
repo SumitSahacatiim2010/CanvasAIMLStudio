@@ -14,6 +14,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.auth import CurrentUser, Role, create_access_token, get_current_user, require_roles
 from app.config import settings
 
+# Import service routers
+from services.connectors.catalog_api import router as catalog_router
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -43,6 +46,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── Mount Service Routers ─────────────────────────────────
+app.include_router(catalog_router)
 
 
 # ── Health & Info ─────────────────────────────────────────
