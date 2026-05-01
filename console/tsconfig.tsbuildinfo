@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/components/header.tsx","./src/components/sidebar.tsx","./src/pages/creditdecisioning.tsx","./src/pages/dashboard.tsx","./src/pages/datasources.tsx","./src/pages/knowledgebase.tsx","./src/pages/mlpipeline.tsx","./src/pages/monitoring.tsx"],"version":"5.9.3"}

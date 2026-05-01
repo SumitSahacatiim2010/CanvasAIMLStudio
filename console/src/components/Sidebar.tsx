@@ -1,4 +1,4 @@
-import { NavLink, useLocation } from 'react-router-dom';
+import { NavLink } from 'react-router-dom';
 
 const NAV_SECTIONS = [
   {
@@ -40,7 +40,6 @@ const NAV_SECTIONS = [
 ];
 
 export function Sidebar() {
-  const location = useLocation();
 
   return (
     <aside className="app-sidebar">
