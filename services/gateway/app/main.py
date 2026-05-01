@@ -16,6 +16,7 @@ from app.config import settings
 
 # Import service routers
 from services.connectors.catalog_api import router as catalog_router
+from services.agentic.workflow_api import router as agentic_router
 
 
 @asynccontextmanager
@@ -49,6 +50,7 @@ app.add_middleware(
 
 # ── Mount Service Routers ─────────────────────────────────
 app.include_router(catalog_router)
+app.include_router(agentic_router)
 
 
 # ── Health & Info ─────────────────────────────────────────
