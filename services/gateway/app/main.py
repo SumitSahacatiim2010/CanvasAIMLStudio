@@ -18,6 +18,7 @@ from app.config import settings
 from services.connectors.catalog_api import router as catalog_router
 from services.agentic.workflow_api import router as agentic_router
 from services.rag.rag_api import router as rag_router
+from services.observability.observability_api import router as obs_router
 
 
 @asynccontextmanager
@@ -53,6 +54,7 @@ app.add_middleware(
 app.include_router(catalog_router)
 app.include_router(agentic_router)
 app.include_router(rag_router)
+app.include_router(obs_router)
 
 
 # ── Health & Info ─────────────────────────────────────────
