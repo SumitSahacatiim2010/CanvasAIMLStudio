@@ -1,0 +1,117 @@
+# CanvasML Studio / TransLab — Local Development Stack
+# Usage: docker compose -f deploy/docker-compose.yml up -d
+
+version: "3.9"
+
+services:
+  # ─── PostgreSQL 16 + pgvector ───────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: canvasml-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-canvasml}
+      POSTGRES_USER: ${POSTGRES_USER:-canvasml}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-canvasml_dev_2024}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts/postgres:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-canvasml}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── MinIO (S3-compatible object storage) ───────────────
+  minio:
+    image: minio/minio:latest
+    container_name: canvasml-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-canvasml}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-canvasml_dev_2024}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Redis 7 (caching & job queues) ────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: canvasml-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Redpanda (Kafka-compatible message bus) ────────────
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:latest
+    container_name: canvasml-redpanda
+    restart: unless-stopped
+    command:
+      - redpanda start
+      - --smp 1
+      - --memory 512M
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:18082
+      - --advertise-pandaproxy-addr internal://redpanda:8082,external://localhost:18082
+      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
+      - --advertise-schema-registry-addr internal://redpanda:8081,external://localhost:18081
+    ports:
+      - "19092:19092"   # Kafka API
+      - "18082:18082"   # Pandaproxy (HTTP)
+      - "18081:18081"   # Schema Registry
+      - "9644:9644"     # Admin API
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  # ─── OpenSearch 2 (keyword index for RAG) ──────────────
+  opensearch:
+    image: opensearchproject/opensearch:2
+    container_name: canvasml-opensearch
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - plugins.security.disabled=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_PASSWORD:-CanvasML_Dev_2024!}
+    ports:
+      - "9200:9200"
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q 'green\\|yellow'"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+volumes:
+  postgres_data:
+  minio_data:
+  redis_data:
+  redpanda_data:
+  opensearch_data:

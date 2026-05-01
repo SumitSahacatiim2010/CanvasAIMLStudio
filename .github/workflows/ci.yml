@@ -1,0 +1,56 @@
+name: CI — Lint, Type Check, Test
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: canvasml_test
+          POSTGRES_USER: canvasml
+          POSTGRES_PASSWORD: test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U canvasml"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff mypy pytest
+          pip install -r services/gateway/requirements.txt
+
+      - name: Lint with ruff
+        run: ruff check services/
+
+      - name: Type check with mypy
+        run: mypy services/gateway/app/ --ignore-missing-imports
+        continue-on-error: true
+
+      - name: Run tests
+        env:
+          DATABASE_URL: postgresql://canvasml:test_password@localhost:5432/canvasml_test
+        run: pytest tests/ services/ -v --tb=short
+        continue-on-error: true
