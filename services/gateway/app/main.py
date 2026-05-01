@@ -19,6 +19,8 @@ from services.connectors.catalog_api import router as catalog_router
 from services.agentic.workflow_api import router as agentic_router
 from services.rag.rag_api import router as rag_router
 from services.observability.observability_api import router as obs_router
+from services.security.security_api import router as security_router
+from services.security.audit import AuditLoggingMiddleware
 
 
 @asynccontextmanager
@@ -41,7 +43,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# ── CORS ──────────────────────────────────────────────────
+# ── CORS & Middleware ───────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins.split(","),
@@ -49,12 +51,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(AuditLoggingMiddleware)
 
 # ── Mount Service Routers ─────────────────────────────────
 app.include_router(catalog_router)
 app.include_router(agentic_router)
 app.include_router(rag_router)
 app.include_router(obs_router)
+app.include_router(security_router)
 
 
 # ── Health & Info ─────────────────────────────────────────
