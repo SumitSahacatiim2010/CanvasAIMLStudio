@@ -22,8 +22,11 @@ docker compose -f deploy/docker-compose.yml up -d
 # Run database migrations
 cd schemas/migrations && alembic upgrade head
 
-# Start gateway service
-cd services/gateway && uvicorn app.main:app --reload --port 8000
+# Start gateway service (requires PYTHONPATH for correct module resolution)
+# On Windows PowerShell:
+$env:PYTHONPATH="."; cd services/gateway && uvicorn app.main:app --reload --port 8000
+# On Linux/macOS:
+# PYTHONPATH=. cd services/gateway && uvicorn app.main:app --reload --port 8000
 ```
 
 ## Project Structure

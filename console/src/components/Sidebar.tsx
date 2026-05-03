@@ -1,57 +1,57 @@
 import { NavLink } from 'react-router-dom';
+import {
+  LayoutDashboard,
+  Database,
+  BrainCircuit,
+  Zap,
+  BookOpen,
+  Activity,
+} from 'lucide-react';
 
 const NAV_SECTIONS = [
   {
     title: 'Overview',
     items: [
-      { path: '/', label: 'Dashboard', icon: '📊' },
+      { path: '/', label: 'Dashboard', icon: LayoutDashboard },
     ],
   },
   {
     title: 'Data Platform',
     items: [
-      { path: '/data', label: 'Data Sources', icon: '🗄️' },
+      { path: '/data', label: 'Data Sources', icon: Database },
     ],
   },
   {
     title: 'ML Platform',
     items: [
-      { path: '/ml', label: 'ML Pipeline', icon: '🧠' },
+      { path: '/ml', label: 'ML Pipeline', icon: BrainCircuit },
     ],
   },
   {
     title: 'Agentic',
     items: [
-      { path: '/decisioning', label: 'Credit Decisioning', icon: '⚡' },
+      { path: '/decisioning', label: 'Credit Decisioning', icon: Zap },
     ],
   },
   {
     title: 'Knowledge',
     items: [
-      { path: '/knowledge', label: 'RAG Knowledge Base', icon: '📚' },
+      { path: '/knowledge', label: 'Knowledge Base', icon: BookOpen },
     ],
   },
   {
     title: 'Ops',
     items: [
-      { path: '/monitoring', label: 'Monitoring & Drift', icon: '📈' },
+      { path: '/monitoring', label: 'Monitoring & Drift', icon: Activity },
     ],
   },
 ];
 
 export function Sidebar() {
-
   return (
     <aside className="app-sidebar">
       <div className="sidebar-logo">
-        <div style={{
-          width: 32, height: 32, borderRadius: 8,
-          background: 'var(--c-accent-gradient)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: '16px', fontWeight: 700, color: 'white',
-        }}>
-          C
-        </div>
+        <div className="sidebar-logo-mark">C</div>
         <h1>CanvasML Studio</h1>
       </div>
 
@@ -59,30 +59,29 @@ export function Sidebar() {
         {NAV_SECTIONS.map((section) => (
           <div key={section.title}>
             <div className="nav-section-title">{section.title}</div>
-            {section.items.map((item) => (
-              <NavLink
-                key={item.path}
-                to={item.path}
-                className={({ isActive }) =>
-                  `nav-link ${isActive ? 'active' : ''}`
-                }
-                end={item.path === '/'}
-              >
-                <span>{item.icon}</span>
-                <span>{item.label}</span>
-              </NavLink>
-            ))}
+            {section.items.map((item) => {
+              const Icon = item.icon;
+              return (
+                <NavLink
+                  key={item.path}
+                  to={item.path}
+                  className={({ isActive }) =>
+                    `nav-link ${isActive ? 'active' : ''}`
+                  }
+                  end={item.path === '/'}
+                >
+                  <Icon size={18} strokeWidth={1.8} />
+                  <span>{item.label}</span>
+                </NavLink>
+              );
+            })}
           </div>
         ))}
       </nav>
 
-      <div style={{
-        padding: 'var(--sp-4)',
-        borderTop: '1px solid var(--c-border)',
-        fontSize: 'var(--fs-xs)',
-        color: 'var(--c-text-muted)',
-      }}>
-        CanvasML Studio v0.1.0
+      <div className="sidebar-footer">
+        <div className="ambient-dot live" />
+        <span>CanvasML Studio v0.1.0</span>
       </div>
     </aside>
   );

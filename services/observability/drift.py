@@ -11,6 +11,9 @@ from enum import Enum
 from typing import Any
 
 import numpy as np
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from services.observability.models import PerformanceSnapshot as DBPerformanceSnapshot, MonitoringAlert as DBMonitoringAlert
 
 
 class DriftSeverity(str, Enum):
@@ -309,46 +312,82 @@ class PerformanceMonitor:
     """Tracks model performance over time and detects degradation."""
 
     def __init__(self) -> None:
-        self._snapshots: dict[str, list[PerformanceSnapshot]] = {}
-        self._alerts: list[dict[str, Any]] = []
+        pass
 
-    def record(
-        self, model_name: str, metrics: dict[str, float],
+    async def record(
+        self, db: AsyncSession, model_name: str, metrics: dict[str, float],
         prediction_count: int = 0, avg_latency_ms: float = 0.0,
-    ) -> PerformanceSnapshot:
+    ) -> DBPerformanceSnapshot:
         """Record a performance snapshot."""
-        snap = PerformanceSnapshot(
-            model_name=model_name, timestamp=datetime.utcnow(),
-            metrics=metrics, prediction_count=prediction_count,
+        snap = DBPerformanceSnapshot(
+            model_id=model_name,
+            metrics=metrics,
+            prediction_count=prediction_count,
             avg_latency_ms=avg_latency_ms,
         )
-        if model_name not in self._snapshots:
-            self._snapshots[model_name] = []
-        self._snapshots[model_name].append(snap)
+        db.add(snap)
+        await db.flush()
 
         # Check for degradation
-        self._check_degradation(model_name)
+        await self._check_degradation(db, model_name)
         return snap
 
-    def get_history(self, model_name: str, last_n: int = 50) -> list[PerformanceSnapshot]:
-        return self._snapshots.get(model_name, [])[-last_n:]
+    async def get_history(self, db: AsyncSession, model_name: str, last_n: int = 50) -> list[DBPerformanceSnapshot]:
+        result = await db.execute(
+            select(DBPerformanceSnapshot)
+            .where(DBPerformanceSnapshot.model_id == model_name)
+            .order_by(DBPerformanceSnapshot.created_at.desc())
+            .limit(last_n)
+        )
+        return list(reversed(result.scalars().all()))
 
-    def get_alerts(self, model_name: str | None = None) -> list[dict[str, Any]]:
+    async def get_alerts(self, db: AsyncSession, model_name: str | None = None) -> list[dict[str, Any]]:
+        query = select(DBMonitoringAlert)
         if model_name:
-            return [a for a in self._alerts if a.get("model") == model_name]
-        return self._alerts
+            query = query.where(DBMonitoringAlert.service == model_name)
+        
+        result = await db.execute(query.order_by(DBMonitoringAlert.created_at.desc()))
+        alerts = result.scalars().all()
+        return [
+            {
+                "id": a.id,
+                "model": a.service,
+                "severity": a.severity,
+                "message": a.message,
+                "details": a.details,
+                "timestamp": a.created_at.isoformat(),
+                "resolved": bool(a.resolved)
+            }
+            for a in alerts
+        ]
 
-    def _check_degradation(self, model_name: str) -> None:
-        history = self._snapshots.get(model_name, [])
+    async def _check_degradation(self, db: AsyncSession, model_name: str) -> None:
+        # Fetch last 20 snapshots for analysis
+        result = await db.execute(
+            select(DBPerformanceSnapshot)
+            .where(DBPerformanceSnapshot.model_id == model_name)
+            .order_by(DBPerformanceSnapshot.created_at.desc())
+            .limit(20)
+        )
+        history = list(reversed(result.scalars().all()))
+        
         if len(history) < 5:
             return
 
         recent = history[-5:]
         baseline = history[:max(1, len(history) // 2)]
 
-        for metric_name in recent[0].metrics:
-            recent_vals = [s.metrics.get(metric_name, 0) for s in recent]
-            baseline_vals = [s.metrics.get(metric_name, 0) for s in baseline]
+        # Get unique metric names from recent snapshots
+        metric_names = set()
+        for s in recent:
+            metric_names.update(s.metrics.keys())
+
+        for metric_name in metric_names:
+            recent_vals = [s.metrics.get(metric_name, 0) for s in recent if metric_name in s.metrics]
+            baseline_vals = [s.metrics.get(metric_name, 0) for s in baseline if metric_name in s.metrics]
+
+            if not recent_vals or not baseline_vals:
+                continue
 
             recent_avg = np.mean(recent_vals)
             baseline_avg = np.mean(baseline_vals)
@@ -356,12 +395,15 @@ class PerformanceMonitor:
             if baseline_avg > 0:
                 degradation = (baseline_avg - recent_avg) / baseline_avg
                 if degradation > 0.1:  # 10% degradation
-                    self._alerts.append({
-                        "model": model_name,
-                        "metric": metric_name,
-                        "baseline_avg": round(float(baseline_avg), 4),
-                        "recent_avg": round(float(recent_avg), 4),
-                        "degradation_pct": round(float(degradation * 100), 1),
-                        "severity": "high" if degradation > 0.2 else "moderate",
-                        "timestamp": datetime.utcnow().isoformat(),
-                    })
+                    alert = DBMonitoringAlert(
+                        service=model_name,
+                        severity="high" if degradation > 0.2 else "moderate",
+                        message=f"Performance degradation detected in {metric_name} for {model_name}",
+                        details={
+                            "metric": metric_name,
+                            "baseline_avg": round(float(baseline_avg), 4),
+                            "recent_avg": round(float(recent_avg), 4),
+                            "degradation_pct": round(float(degradation * 100), 1),
+                        }
+                    )
+                    db.add(alert)

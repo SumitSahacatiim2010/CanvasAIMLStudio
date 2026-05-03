@@ -11,8 +11,8 @@ from typing import AsyncIterator
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.auth import CurrentUser, Role, create_access_token, get_current_user, require_roles
-from app.config import settings
+from services.gateway.app.auth import CurrentUser, Role, create_access_token, get_current_user, require_roles
+from services.gateway.app.config import settings
 
 # Import service routers
 from services.connectors.catalog_api import router as catalog_router
@@ -20,6 +20,7 @@ from services.agentic.workflow_api import router as agentic_router
 from services.rag.rag_api import router as rag_router
 from services.observability.observability_api import router as obs_router
 from services.security.security_api import router as security_router
+from services.ml.ml_api import router as ml_router
 from services.security.audit import AuditLoggingMiddleware
 
 
@@ -27,11 +28,11 @@ from services.security.audit import AuditLoggingMiddleware
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Startup and shutdown events."""
     # Startup: verify database connectivity, warm caches, etc.
-    print(f"🚀 CanvasML Studio Gateway starting on port {settings.gateway_port}")
+    print(f"[*] CanvasML Studio Gateway starting on port {settings.gateway_port}")
     print(f"   Environment: {settings.environment}")
     yield
     # Shutdown: clean up resources
-    print("👋 Gateway shutting down")
+    print("[*] Gateway shutting down")
 
 
 app = FastAPI(
@@ -59,6 +60,7 @@ app.include_router(agentic_router)
 app.include_router(rag_router)
 app.include_router(obs_router)
 app.include_router(security_router)
+app.include_router(ml_router)
 
 
 # ── Health & Info ─────────────────────────────────────────

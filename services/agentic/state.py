@@ -82,6 +82,55 @@ class AgentState(TypedDict, total=False):
     completed_at: str
 
 
+class AutoMLState(TypedDict, total=False):
+    """Typed state for the AutoML agentic workflow."""
+    
+    # ── Dataset Identity ───────────────────────────────
+    dataset_id: str
+    dataset_path: str
+    target_column: str
+    
+    # ── Analysis ────────────────────────────────────────
+    schema: dict[str, Any]
+    baseline_stats: dict[str, Any]
+    feature_importance: dict[str, float]
+    
+    # ── Decisions ───────────────────────────────────────
+    problem_type: str  # classification, regression
+    algorithm: str  # xgboost, random_forest, etc.
+    hyperparameters: dict[str, Any]
+    preprocessing_steps: list[str]
+    
+    # ── Outcomes ────────────────────────────────────────
+    experiment_id: str
+    model_id: str
+    metrics: dict[str, float]
+    reasoning: str  # LLM's rationale for choices
+    
+    # ── Infrastructure ──────────────────────────────────
+    trace: list[dict[str, Any]]
+    errors: list[dict[str, Any]]
+    started_at: str
+    completed_at: str
+
+
+def create_initial_automl_state(dataset_id: str, dataset_path: str) -> AutoMLState:
+    """Create a fresh AutoMLState."""
+    return AutoMLState(
+        dataset_id=dataset_id,
+        dataset_path=dataset_path,
+        schema={},
+        baseline_stats={},
+        feature_importance={},
+        hyperparameters={},
+        preprocessing_steps=[],
+        trace=[],
+        errors=[],
+        started_at=datetime.utcnow().isoformat(),
+        completed_at="",
+    )
+
+
 def create_initial_state(
     application_id: str,
     product_type: str = "personal_loan",

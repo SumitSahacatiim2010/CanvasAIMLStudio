@@ -6,12 +6,15 @@ Registered as a router on the gateway service.
 
 from datetime import datetime, timezone
 from typing import Any
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, or_
 
 from services.gateway.app.auth import CurrentUser, Role, get_current_user, require_roles
+from services.gateway.app.database import get_db
+from services.connectors.models import Source, Dataset, LineageEdge
 
 router = APIRouter(prefix="/api/v1/catalog", tags=["Data Catalog"])
 
@@ -32,7 +35,9 @@ class SourceResponse(BaseModel):
     type: str
     status: str
     description: str
-    created_at: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
 
 
 class DatasetResponse(BaseModel):
@@ -43,7 +48,9 @@ class DatasetResponse(BaseModel):
     size_bytes: int | None
     field_count: int
     tags: list[str]
-    created_at: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
 
 
 class FieldResponse(BaseModel):
@@ -64,21 +71,10 @@ class LineageEdgeResponse(BaseModel):
     upstream_dataset_id: str
     downstream_dataset_id: str
     transform_type: str
-    created_at: str
+    created_at: datetime
 
+    model_config = {"from_attributes": True}
 
-# ── In-Memory Store (replaced by DB in Phase 1.5) ───────
-
-_sources: dict[str, dict[str, Any]] = {}
-_datasets: dict[str, dict[str, Any]] = {}
-_lineage: list[dict[str, Any]] = []
-_id_counter = 0
-
-
-def _next_id() -> str:
-    global _id_counter
-    _id_counter += 1
-    return f"src-{_id_counter:04d}"
 
 
 # ── Source Endpoints ─────────────────────────────────────
@@ -88,21 +84,21 @@ def _next_id() -> str:
 async def register_source(
     source: SourceCreate,
     user: CurrentUser = Depends(require_roles(Role.PLATFORM_ADMIN, Role.DATA_ENGINEER)),
-) -> dict[str, Any]:
+    session: AsyncSession = Depends(get_db),
+) -> Any:
     """Register a new data source."""
-    source_id = _next_id()
-    record = {
-        "id": source_id,
-        "name": source.name,
-        "type": source.type,
-        "config": source.config,
-        "status": "inactive",
-        "description": source.description,
-        "created_by": user.user_id,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    _sources[source_id] = record
-    return record
+    new_source = Source(
+        name=source.name,
+        type=source.type,
+        config=source.config,
+        status="inactive",
+        description=source.description,
+        created_by=user.user_id,
+    )
+    session.add(new_source)
+    await session.commit()
+    await session.refresh(new_source)
+    return new_source
 
 
 @router.get("/sources", response_model=list[SourceResponse])
@@ -110,37 +106,41 @@ async def list_sources(
     user: CurrentUser = Depends(get_current_user),
     status_filter: str | None = Query(None, alias="status"),
     type_filter: str | None = Query(None, alias="type"),
-) -> list[dict[str, Any]]:
+    session: AsyncSession = Depends(get_db),
+) -> Any:
     """List all registered data sources."""
-    results = list(_sources.values())
+    stmt = select(Source)
     if status_filter:
-        results = [s for s in results if s["status"] == status_filter]
+        stmt = stmt.where(Source.status == status_filter)
     if type_filter:
-        results = [s for s in results if s["type"] == type_filter]
-    return results
+        stmt = stmt.where(Source.type == type_filter)
+    result = await session.execute(stmt)
+    return result.scalars().all()
 
 
 @router.get("/sources/{source_id}", response_model=SourceResponse)
 async def get_source(
     source_id: str,
     user: CurrentUser = Depends(get_current_user),
-) -> dict[str, Any]:
+    session: AsyncSession = Depends(get_db),
+) -> Any:
     """Get a specific data source by ID."""
-    if source_id not in _sources:
+    source = await session.get(Source, source_id)
+    if not source:
         raise HTTPException(status_code=404, detail=f"Source {source_id} not found")
-    return _sources[source_id]
+    return source
 
 
 @router.post("/sources/{source_id}/test")
 async def test_source_connectivity(
     source_id: str,
     user: CurrentUser = Depends(require_roles(Role.PLATFORM_ADMIN, Role.DATA_ENGINEER)),
+    session: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """Test connectivity to a data source."""
-    if source_id not in _sources:
+    source = await session.get(Source, source_id)
+    if not source:
         raise HTTPException(status_code=404, detail=f"Source {source_id} not found")
-
-    source = _sources[source_id]
 
     # Use connector factory to test
     from services.connectors.base import ConnectorConfig
@@ -148,16 +148,18 @@ async def test_source_connectivity(
 
     try:
         config = ConnectorConfig(
-            name=source["name"],
-            connector_type=source["type"],
-            config=source["config"],
+            name=source.name,
+            connector_type=source.type,
+            config=source.config,
         )
         connector = create_connector(config)
         success, message = connector.test_connectivity()
-        source["status"] = "active" if success else "error"
+        source.status = "active" if success else "error"
+        await session.commit()
         return {"source_id": source_id, "connected": success, "message": message}
     except Exception as e:
-        source["status"] = "error"
+        source.status = "error"
+        await session.commit()
         return {"source_id": source_id, "connected": False, "message": str(e)}
 
 
@@ -165,20 +167,20 @@ async def test_source_connectivity(
 async def discover_schemas(
     source_id: str,
     user: CurrentUser = Depends(require_roles(Role.PLATFORM_ADMIN, Role.DATA_ENGINEER)),
+    session: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """Discover schemas/tables in a data source and register as datasets."""
-    if source_id not in _sources:
+    source = await session.get(Source, source_id)
+    if not source:
         raise HTTPException(status_code=404, detail=f"Source {source_id} not found")
-
-    source = _sources[source_id]
 
     from services.connectors.base import ConnectorConfig
     from services.connectors.factory import create_connector
 
     config = ConnectorConfig(
-        name=source["name"],
-        connector_type=source["type"],
-        config=source["config"],
+        name=source.name,
+        connector_type=source.type,
+        config=source.config,
     )
     connector = create_connector(config)
 
@@ -188,25 +190,24 @@ async def discover_schemas(
     # Register discovered schemas as datasets
     registered = []
     for schema in schemas:
-        ds_id = _next_id()
-        dataset = {
-            "id": ds_id,
-            "source_id": source_id,
-            "name": schema.name,
-            "row_count": schema.row_count,
-            "size_bytes": schema.size_bytes,
-            "fields": [
+        dataset = Dataset(
+            source_id=source_id,
+            name=schema.name,
+            row_count=schema.row_count,
+            size_bytes=schema.size_bytes,
+            fields=[
                 {"name": f.name, "dtype": f.dtype, "nullable": f.nullable, "pii_classification": f.pii_classification}
                 for f in schema.fields
             ],
-            "field_count": len(schema.fields),
-            "tags": [],
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        _datasets[ds_id] = dataset
+            field_count=len(schema.fields),
+            tags=[],
+        )
+        session.add(dataset)
         registered.append(dataset)
 
-    return {"source_id": source_id, "datasets_discovered": len(registered), "datasets": registered}
+    await session.commit()
+
+    return {"source_id": source_id, "datasets_discovered": len(registered), "datasets": [{"id": d.id, "name": d.name} for d in registered]}
 
 
 # ── Dataset Endpoints ────────────────────────────────────
@@ -217,25 +218,33 @@ async def list_datasets(
     user: CurrentUser = Depends(get_current_user),
     source_id: str | None = Query(None),
     search: str | None = Query(None),
-) -> list[dict[str, Any]]:
+    session: AsyncSession = Depends(get_db),
+) -> Any:
     """List all registered datasets."""
-    results = list(_datasets.values())
+    stmt = select(Dataset)
     if source_id:
-        results = [d for d in results if d["source_id"] == source_id]
+        stmt = stmt.where(Dataset.source_id == source_id)
     if search:
-        results = [d for d in results if search.lower() in d["name"].lower()]
-    return results
+        stmt = stmt.where(Dataset.name.ilike(f"%{search}%"))
+    
+    result = await session.execute(stmt)
+    return result.scalars().all()
 
 
 @router.get("/datasets/{dataset_id}")
 async def get_dataset(
     dataset_id: str,
     user: CurrentUser = Depends(get_current_user),
-) -> dict[str, Any]:
+    session: AsyncSession = Depends(get_db),
+) -> Any:
     """Get dataset details including fields."""
-    if dataset_id not in _datasets:
+    dataset = await session.get(Dataset, dataset_id)
+    if not dataset:
         raise HTTPException(status_code=404, detail=f"Dataset {dataset_id} not found")
-    return _datasets[dataset_id]
+    # Return as SQLAlchemy model instance, handled by FastAPI since response_model isn't specified...
+    # Wait, the previous signature had no response_model. FastAPI defaults to auto. 
+    # Let's map it to DatasetResponse to be safe.
+    return DatasetResponse.model_validate(dataset)
 
 
 # ── Lineage Endpoints ────────────────────────────────────
@@ -245,34 +254,40 @@ async def get_dataset(
 async def create_lineage_edge(
     edge: LineageEdgeCreate,
     user: CurrentUser = Depends(require_roles(Role.PLATFORM_ADMIN, Role.DATA_ENGINEER)),
-) -> dict[str, Any]:
+    session: AsyncSession = Depends(get_db),
+) -> Any:
     """Create a lineage relationship between datasets."""
-    record = {
-        "id": _next_id(),
-        "upstream_dataset_id": edge.upstream_dataset_id,
-        "downstream_dataset_id": edge.downstream_dataset_id,
-        "transform_type": edge.transform_type,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    _lineage.append(record)
-    return record
+    new_edge = LineageEdge(
+        upstream_dataset_id=edge.upstream_dataset_id,
+        downstream_dataset_id=edge.downstream_dataset_id,
+        transform_type=edge.transform_type,
+    )
+    session.add(new_edge)
+    await session.commit()
+    await session.refresh(new_edge)
+    return new_edge
 
 
 @router.get("/lineage/{dataset_id}")
 async def get_dataset_lineage(
     dataset_id: str,
-    direction: str = Query("both", regex="^(upstream|downstream|both)$"),
+    direction: str = Query("both", pattern="^(upstream|downstream|both)$"),
     user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """Get lineage for a dataset — upstream sources, downstream consumers, or both."""
-    upstream = [e for e in _lineage if e["downstream_dataset_id"] == dataset_id]
-    downstream = [e for e in _lineage if e["upstream_dataset_id"] == dataset_id]
-
     result: dict[str, Any] = {"dataset_id": dataset_id}
+    
     if direction in ("upstream", "both"):
-        result["upstream"] = upstream
+        stmt = select(LineageEdge).where(LineageEdge.downstream_dataset_id == dataset_id)
+        upstream_res = await session.execute(stmt)
+        result["upstream"] = [LineageEdgeResponse.model_validate(e) for e in upstream_res.scalars().all()]
+        
     if direction in ("downstream", "both"):
-        result["downstream"] = downstream
+        stmt = select(LineageEdge).where(LineageEdge.upstream_dataset_id == dataset_id)
+        downstream_res = await session.execute(stmt)
+        result["downstream"] = [LineageEdgeResponse.model_validate(e) for e in downstream_res.scalars().all()]
+        
     return result
 
 
@@ -283,16 +298,22 @@ async def get_dataset_lineage(
 async def search_catalog(
     q: str = Query(..., min_length=1, description="Search query"),
     user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """Search across sources and datasets."""
-    query_lower = q.lower()
-
-    matching_sources = [s for s in _sources.values() if query_lower in s["name"].lower()]
-    matching_datasets = [d for d in _datasets.values() if query_lower in d["name"].lower()]
+    # Search sources
+    stmt_src = select(Source).where(Source.name.ilike(f"%{q}%"))
+    sources_res = await session.execute(stmt_src)
+    matching_sources = sources_res.scalars().all()
+    
+    # Search datasets
+    stmt_ds = select(Dataset).where(Dataset.name.ilike(f"%{q}%"))
+    datasets_res = await session.execute(stmt_ds)
+    matching_datasets = datasets_res.scalars().all()
 
     return {
         "query": q,
-        "sources": matching_sources,
-        "datasets": matching_datasets,
+        "sources": [SourceResponse.model_validate(s) for s in matching_sources],
+        "datasets": [DatasetResponse.model_validate(d) for d in matching_datasets],
         "total_results": len(matching_sources) + len(matching_datasets),
     }

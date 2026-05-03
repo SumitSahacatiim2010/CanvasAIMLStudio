@@ -66,6 +66,7 @@ class TrainedModel:
     metrics: ModelMetrics
     feature_names: list[str]
     hyperparameters: dict[str, Any]
+    schema: dict[str, str] = field(default_factory=dict)
     trained_at: datetime = field(default_factory=datetime.utcnow)
 
 
@@ -145,6 +146,12 @@ class TrainingService:
         X = np.array([[row.get(f, 0) for f in feature_names] for row in data], dtype=float)
         y = np.array([row.get(config.target_column, 0) for row in data], dtype=float)
 
+        # Infer schema
+        model_schema = {
+            f: type(data[0].get(f)).__name__ if data[0].get(f) is not None else "float"
+            for f in feature_names
+        }
+
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=config.test_size, random_state=config.random_state
         )
@@ -221,6 +228,7 @@ class TrainingService:
                     metrics=metrics,
                     feature_names=feature_names,
                     hyperparameters=hyperparams,
+                    schema=model_schema,
                 ))
 
             except Exception as e:

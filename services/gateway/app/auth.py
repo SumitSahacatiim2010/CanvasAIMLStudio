@@ -10,7 +10,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from pydantic import BaseModel
 
-from app.config import settings
+from services.gateway.app.config import settings
 
 security = HTTPBearer()
 

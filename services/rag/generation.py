@@ -136,6 +136,39 @@ class RAGGenerator:
                 "If the context doesn't contain enough information, say so clearly."
             )
 
+        import os
+        google_api_key = os.environ.get("GOOGLE_API_KEY")
+
+        if google_api_key:
+            try:
+                import google.generativeai as genai
+                genai.configure(api_key=google_api_key)
+                
+                model_name = self.config.get("model")
+                if not model_name or "gpt" in model_name:
+                    model_name = "gemini-2.5-flash"
+                    
+                model = genai.GenerativeModel(
+                    model_name=model_name,
+                    system_instruction=system_prompt,
+                    generation_config=genai.GenerationConfig(
+                        temperature=self.config.get("temperature", 0.1),
+                        max_output_tokens=self.config.get("max_tokens", 2048),
+                    )
+                )
+                
+                prompt = f"Context:\n{context}\n\nQuestion: {query}"
+                response = model.generate_content(prompt)
+                
+                self.config["model"] = model_name
+                
+                return response.text
+
+            except ImportError:
+                print("google-generativeai not installed, falling back to other providers")
+            except Exception as e:
+                print(f"Error calling Gemini: {e}")
+
         try:
             import openai
             client = openai.OpenAI()

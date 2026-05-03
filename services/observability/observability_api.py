@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from services.gateway.app.auth import CurrentUser, Role, get_current_user, require_roles
+from services.gateway.app.database import get_db, AsyncSession
 from services.observability.drift import DriftDetector, PerformanceMonitor
 
 router = APIRouter(prefix="/api/v1/observability", tags=["Observability & Monitoring"])
@@ -62,18 +63,21 @@ async def check_drift(
 @router.post("/performance/record")
 async def record_performance(
     req: PerformanceRecordRequest,
+    db: AsyncSession = Depends(get_db),
     user: CurrentUser = Depends(require_roles(Role.DATA_SCIENTIST, Role.PLATFORM_ADMIN)),
 ) -> dict[str, Any]:
     """Record model performance metrics."""
-    snap = _perf_monitor.record(
-        model_name=req.model_name, metrics=req.metrics,
+    snap = await _perf_monitor.record(
+        db=db, model_name=req.model_name, metrics=req.metrics,
         prediction_count=req.prediction_count, avg_latency_ms=req.avg_latency_ms,
     )
+    await db.commit()
+    alerts = await _perf_monitor.get_alerts(db, req.model_name)
     return {
-        "model_name": snap.model_name,
-        "timestamp": snap.timestamp.isoformat(),
+        "model_name": snap.model_id,
+        "timestamp": snap.created_at.isoformat(),
         "metrics": snap.metrics,
-        "alerts": _perf_monitor.get_alerts(req.model_name),
+        "alerts": alerts,
     }
 
 
@@ -81,14 +85,15 @@ async def record_performance(
 async def get_performance_history(
     model_name: str,
     last_n: int = Query(default=50, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
     user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Get performance history for a model."""
-    history = _perf_monitor.get_history(model_name, last_n)
+    history = await _perf_monitor.get_history(db, model_name, last_n)
     return {
         "model_name": model_name,
         "snapshots": [
-            {"timestamp": s.timestamp.isoformat(), "metrics": s.metrics,
+            {"timestamp": s.created_at.isoformat(), "metrics": s.metrics,
              "predictions": s.prediction_count, "latency_ms": s.avg_latency_ms}
             for s in history
         ],
@@ -99,8 +104,9 @@ async def get_performance_history(
 @router.get("/alerts")
 async def get_alerts(
     model_name: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
     user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Get monitoring alerts."""
-    alerts = _perf_monitor.get_alerts(model_name)
+    alerts = await _perf_monitor.get_alerts(db, model_name)
     return {"alerts": alerts, "total": len(alerts)}

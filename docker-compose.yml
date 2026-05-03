@@ -1,0 +1,75 @@
+version: "3.9"
+
+# CanvasML Studio — Local Development Infrastructure
+# Provides PostgreSQL, pgAdmin, and Redis for the platform services.
+#
+# Usage:
+#   docker compose up -d          # Start all services
+#   docker compose down           # Stop all services
+#   docker compose down -v        # Stop and remove all data volumes
+#   docker compose logs -f db     # Tail DB logs
+
+services:
+
+  # ── PostgreSQL — primary datastore ──────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: canvasml-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-canvasml}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-canvasml_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-canvasml}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/db/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-canvasml} -d ${POSTGRES_DB:-canvasml}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ── pgAdmin — web-based DB GUI (optional) ────────────────────────────────────
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: canvasml-pgadmin
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@canvasml.dev
+      PGADMIN_DEFAULT_PASSWORD: admin123
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+
+  # ── Redis — session cache, rate limiting, job queues ─────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: canvasml-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  postgres_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+  redis_data:
+    driver: local
